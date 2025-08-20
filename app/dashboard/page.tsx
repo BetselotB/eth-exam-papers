@@ -20,6 +20,7 @@ export default function DashboardPage() {
   const [category, setCategory] = useState("all");
   const [cursor, setCursor] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
   // Remove the conflicting redirect logic - middleware handles this
   // useEffect(() => {
@@ -55,16 +56,19 @@ export default function DashboardPage() {
   const loadFeed = async ({ reset = false }: { reset?: boolean } = {}) => {
     try {
       setFeedLoading(true);
-      const docs = await UserService.listDocuments({
+      const bundles = await UserService.listBundles({
         query: search,
         category,
         limit: 24,
         cursor: reset ? null : cursor,
       });
-      const withUrls = docs.map((d) => ({
-        ...d,
-        url: UserService.getPublicUrl(d.file_path),
-      }));
+      const withUrls = bundles.map((b) => {
+        const first = b.documents?.[0] || null;
+        const previewUrl = first
+          ? UserService.getPublicUrl(first.file_path)
+          : null;
+        return { ...b, previewUrl };
+      });
       if (reset) {
         setFeed(withUrls);
       } else {
@@ -170,7 +174,7 @@ export default function DashboardPage() {
                   className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
-              <div>
+              <div className="flex items-center gap-2">
                 <select
                   value={category}
                   onChange={(e) => setCategory(e.target.value)}
@@ -184,7 +188,10 @@ export default function DashboardPage() {
                 </select>
               </div>
               <button
-                onClick={() => setUploadOpen(true)}
+                onClick={() => {
+                  setSelectedFiles([]);
+                  setUploadOpen(true);
+                }}
                 className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap"
               >
                 Upload Document
@@ -296,33 +303,48 @@ export default function DashboardPage() {
             <div className="text-center text-gray-600">No documents found.</div>
           ) : (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-              {feed.map((doc) => (
+              {feed.map((bundle) => (
                 <div
-                  key={doc.id}
+                  key={bundle.id}
                   className="bg-white rounded-xl shadow-md overflow-hidden"
                 >
+                  {bundle.previewUrl ? (
+                    <div className="aspect-[16/10] bg-gray-100">
+                      <iframe
+                        src={`${bundle.previewUrl}#toolbar=0&navpanes=0&statusbar=0&page=1`}
+                        className="w-full h-full"
+                      />
+                    </div>
+                  ) : (
+                    <div className="h-40 bg-gray-100 flex items-center justify-center text-gray-400">
+                      No preview
+                    </div>
+                  )}
                   <div className="p-4">
                     <div className="flex items-start justify-between">
                       <div>
                         <h3 className="font-semibold text-gray-900">
-                          {doc.name}
+                          {bundle.name}
                         </h3>
-                        <p className="text-sm text-gray-500">{doc.category}</p>
+                        <p className="text-sm text-gray-500">
+                          {bundle.category}
+                        </p>
                       </div>
-                      <a
-                        href={doc.url}
-                        target="_blank"
-                        rel="noreferrer"
+                      <Link
+                        href={`/documents/${bundle.id}`}
                         className="text-blue-600 hover:underline"
                       >
                         View
-                      </a>
+                      </Link>
                     </div>
-                    {doc.description && (
+                    {bundle.description && (
                       <p className="text-gray-600 text-sm mt-2 line-clamp-3">
-                        {doc.description}
+                        {bundle.description}
                       </p>
                     )}
+                    <p className="text-xs text-gray-500 mt-2">
+                      {bundle.documents?.length || 0} file(s)
+                    </p>
                   </div>
                 </div>
               ))}
@@ -425,32 +447,38 @@ export default function DashboardPage() {
               onSubmit={async (e) => {
                 e.preventDefault();
                 const form = e.currentTarget as HTMLFormElement;
-                const fileInput = form.elements.namedItem(
-                  "file"
-                ) as HTMLInputElement;
                 const nameInput = form.elements.namedItem(
                   "name"
                 ) as HTMLInputElement;
                 const categoryInput = form.elements.namedItem(
                   "category"
                 ) as HTMLSelectElement;
+                const customCategoryInput = form.elements.namedItem(
+                  "customCategory"
+                ) as HTMLInputElement;
                 const descInput = form.elements.namedItem(
                   "description"
                 ) as HTMLInputElement;
-                const file = fileInput.files?.[0];
-                if (!file) return;
+                const files = selectedFiles;
+                if (files.length === 0) return;
+                const finalCategory =
+                  categoryInput.value === "custom" &&
+                  customCategoryInput.value.trim()
+                    ? customCategoryInput.value.trim()
+                    : categoryInput.value;
                 setUploading(true);
-                const res = await UserService.uploadDocument({
-                  file,
+                const res = await UserService.uploadDocuments({
+                  files,
                   name: nameInput.value,
-                  category: categoryInput.value,
+                  category: finalCategory,
                   description: descInput.value,
                 });
                 setUploading(false);
-                if (res) {
+                if (res && res.results && res.results.length) {
                   setUploadOpen(false);
                   setSearch("");
                   setCategory("all");
+                  setSelectedFiles([]);
                   await loadFeed({ reset: true });
                 }
               }}
@@ -472,6 +500,15 @@ export default function DashboardPage() {
                   name="category"
                   defaultValue="other"
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                  onChange={(e) => {
+                    const custom =
+                      (e.currentTarget.form?.elements.namedItem(
+                        "customCategory"
+                      ) as HTMLInputElement) || null;
+                    if (custom)
+                      custom.style.display =
+                        e.target.value === "custom" ? "block" : "none";
+                  }}
                 >
                   {categories
                     .filter((c) => c.key !== "all")
@@ -480,7 +517,14 @@ export default function DashboardPage() {
                         {c.label}
                       </option>
                     ))}
+                  <option value="custom">Custom</option>
                 </select>
+                <input
+                  name="customCategory"
+                  placeholder="Enter custom category"
+                  className="mt-2 w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
+                  style={{ display: "none" }}
+                />
               </div>
               <div>
                 <label className="block text-sm text-gray-700 mb-1">
@@ -493,15 +537,73 @@ export default function DashboardPage() {
                 />
               </div>
               <div>
-                <label className="block text-sm text-gray-700 mb-1">File</label>
+                <label className="block text-sm text-gray-700 mb-1">
+                  File(s)
+                </label>
                 <input
                   ref={fileInputRef}
-                  name="file"
+                  name="files"
                   type="file"
+                  multiple
                   accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx"
-                  required
                   className="w-full text-gray-900"
+                  onChange={(e) => {
+                    const next = e.target.files
+                      ? Array.from(e.target.files)
+                      : [];
+                    if (next.length === 0) return;
+                    setSelectedFiles((prev) => {
+                      const seen = new Set(
+                        prev.map((f) => `${f.name}-${f.size}-${f.lastModified}`)
+                      );
+                      const additions = next.filter(
+                        (f) =>
+                          !seen.has(`${f.name}-${f.size}-${f.lastModified}`)
+                      );
+                      return [...prev, ...additions];
+                    });
+                    // reset input so the same selection can be added again
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
                 />
+                {selectedFiles.length > 0 && (
+                  <div className="mt-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm text-gray-700">
+                        {selectedFiles.length} file
+                        {selectedFiles.length > 1 ? "s" : ""} selected
+                      </span>
+                      <button
+                        type="button"
+                        className="text-sm text-red-600 hover:underline"
+                        onClick={() => setSelectedFiles([])}
+                      >
+                        Clear all
+                      </button>
+                    </div>
+                    <ul className="max-h-40 overflow-auto space-y-1">
+                      {selectedFiles.map((f, idx) => (
+                        <li
+                          key={`${f.name}-${f.size}-${f.lastModified}`}
+                          className="flex items-center justify-between text-sm bg-gray-50 border border-gray-200 rounded px-2 py-1"
+                        >
+                          <span className="truncate mr-3">{f.name}</span>
+                          <button
+                            type="button"
+                            className="text-gray-500 hover:text-gray-700"
+                            onClick={() =>
+                              setSelectedFiles((prev) =>
+                                prev.filter((_, i) => i !== idx)
+                              )
+                            }
+                          >
+                            Remove
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
               <div className="flex justify-end gap-3 pt-2">
                 <button

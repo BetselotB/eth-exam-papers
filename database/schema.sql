@@ -23,15 +23,33 @@ CREATE INDEX IF NOT EXISTS idx_user_profiles_institution ON user_profiles(instit
 -- Enable Row Level Security
 ALTER TABLE user_profiles ENABLE ROW LEVEL SECURITY;
 
--- Create RLS policies
-CREATE POLICY "Users can view their own profile" ON user_profiles
-  FOR SELECT USING (auth.uid() = id);
+-- RLS policies (idempotent)
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'user_profiles' AND policyname = 'Users can view their own profile'
+  ) THEN
+    CREATE POLICY "Users can view their own profile" ON user_profiles
+      FOR SELECT USING (auth.uid() = id);
+  END IF;
 
-CREATE POLICY "Users can update their own profile" ON user_profiles
-  FOR UPDATE USING (auth.uid() = id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'user_profiles' AND policyname = 'Users can update their own profile'
+  ) THEN
+    CREATE POLICY "Users can update their own profile" ON user_profiles
+      FOR UPDATE USING (auth.uid() = id);
+  END IF;
 
-CREATE POLICY "Users can insert their own profile" ON user_profiles
-  FOR INSERT WITH CHECK (auth.uid() = id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'user_profiles' AND policyname = 'Users can insert their own profile'
+  ) THEN
+    CREATE POLICY "Users can insert their own profile" ON user_profiles
+      FOR INSERT WITH CHECK (auth.uid() = id);
+  END IF;
+END $$;
 
 -- Create function to automatically create profile on user signup
 CREATE OR REPLACE FUNCTION public.handle_new_user()
@@ -44,9 +62,14 @@ END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
 
 -- Create trigger to automatically create profile
-CREATE TRIGGER on_auth_user_created
-  AFTER INSERT ON auth.users
-  FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'on_auth_user_created') THEN
+    CREATE TRIGGER on_auth_user_created
+      AFTER INSERT ON auth.users
+      FOR EACH ROW EXECUTE FUNCTION public.handle_new_user();
+  END IF;
+END $$;
 
 -- Create function to update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -58,18 +81,80 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Create trigger to automatically update updated_at
-CREATE TRIGGER update_user_profiles_updated_at
-  BEFORE UPDATE ON user_profiles
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_user_profiles_updated_at') THEN
+    CREATE TRIGGER update_user_profiles_updated_at
+      BEFORE UPDATE ON user_profiles
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  END IF;
+END $$;
 
 -- Grant necessary permissions
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT ALL ON public.user_profiles TO anon, authenticated;
 
 -- Documents table for user-uploaded files/notes
+-- Parent entity to allow bundling multiple files into a single post/product
+CREATE TABLE IF NOT EXISTS document_bundles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  description TEXT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_document_bundles_created_at ON document_bundles(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_document_bundles_category ON document_bundles(category);
+CREATE INDEX IF NOT EXISTS idx_document_bundles_user_id ON document_bundles(user_id);
+
+ALTER TABLE document_bundles ENABLE ROW LEVEL SECURITY;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='document_bundles' AND policyname='Anyone can read bundles'
+  ) THEN
+    CREATE POLICY "Anyone can read bundles" ON document_bundles FOR SELECT USING (true);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='document_bundles' AND policyname='Authenticated users can insert bundles'
+  ) THEN
+    CREATE POLICY "Authenticated users can insert bundles" ON document_bundles FOR INSERT WITH CHECK (auth.uid() = user_id);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='document_bundles' AND policyname='Owners can update bundles'
+  ) THEN
+    CREATE POLICY "Owners can update bundles" ON document_bundles FOR UPDATE USING (auth.uid() = user_id);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE schemaname='public' AND tablename='document_bundles' AND policyname='Owners can delete bundles'
+  ) THEN
+    CREATE POLICY "Owners can delete bundles" ON document_bundles FOR DELETE USING (auth.uid() = user_id);
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_document_bundles_updated_at') THEN
+    CREATE TRIGGER update_document_bundles_updated_at
+      BEFORE UPDATE ON document_bundles
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  END IF;
+END $$;
+
+-- Grants
+GRANT ALL ON public.document_bundles TO anon, authenticated;
+
 CREATE TABLE IF NOT EXISTS documents (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  bundle_id UUID REFERENCES document_bundles(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   category TEXT NOT NULL,
   description TEXT,
@@ -88,22 +173,49 @@ CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
 -- RLS policies
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 
--- Anyone can view documents (public feed)
-CREATE POLICY "Anyone can read documents" ON documents
-  FOR SELECT USING (true);
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'documents' AND policyname = 'Anyone can read documents'
+  ) THEN
+    CREATE POLICY "Anyone can read documents" ON documents
+      FOR SELECT USING (true);
+  END IF;
 
--- Only authenticated users can insert, and only as themselves
-CREATE POLICY "Authenticated users can insert their documents" ON documents
-  FOR INSERT WITH CHECK (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'documents' AND policyname = 'Authenticated users can insert their documents'
+  ) THEN
+    CREATE POLICY "Authenticated users can insert their documents" ON documents
+      FOR INSERT WITH CHECK (auth.uid() = user_id);
+  END IF;
 
--- Owners can update/delete their own documents
-CREATE POLICY "Owners can update documents" ON documents
-  FOR UPDATE USING (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'documents' AND policyname = 'Owners can update documents'
+  ) THEN
+    CREATE POLICY "Owners can update documents" ON documents
+      FOR UPDATE USING (auth.uid() = user_id);
+  END IF;
 
-CREATE POLICY "Owners can delete documents" ON documents
-  FOR DELETE USING (auth.uid() = user_id);
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies
+    WHERE schemaname = 'public' AND tablename = 'documents' AND policyname = 'Owners can delete documents'
+  ) THEN
+    CREATE POLICY "Owners can delete documents" ON documents
+      FOR DELETE USING (auth.uid() = user_id);
+  END IF;
+END $$;
 
--- Trigger to update updated_at
-CREATE TRIGGER update_documents_updated_at
-  BEFORE UPDATE ON documents
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'update_documents_updated_at') THEN
+    CREATE TRIGGER update_documents_updated_at
+      BEFORE UPDATE ON documents
+      FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  END IF;
+END $$;
+
+-- Grants
+GRANT ALL ON public.documents TO anon, authenticated;
