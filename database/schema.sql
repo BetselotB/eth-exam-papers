@@ -65,3 +65,45 @@ CREATE TRIGGER update_user_profiles_updated_at
 -- Grant necessary permissions
 GRANT USAGE ON SCHEMA public TO anon, authenticated;
 GRANT ALL ON public.user_profiles TO anon, authenticated;
+
+-- Documents table for user-uploaded files/notes
+CREATE TABLE IF NOT EXISTS documents (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE NOT NULL,
+  name TEXT NOT NULL,
+  category TEXT NOT NULL,
+  description TEXT,
+  file_path TEXT NOT NULL,
+  mime_type TEXT,
+  size BIGINT,
+  created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Indexes for faster queries
+CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_documents_category ON documents(category);
+CREATE INDEX IF NOT EXISTS idx_documents_user_id ON documents(user_id);
+
+-- RLS policies
+ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
+
+-- Anyone can view documents (public feed)
+CREATE POLICY "Anyone can read documents" ON documents
+  FOR SELECT USING (true);
+
+-- Only authenticated users can insert, and only as themselves
+CREATE POLICY "Authenticated users can insert their documents" ON documents
+  FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+-- Owners can update/delete their own documents
+CREATE POLICY "Owners can update documents" ON documents
+  FOR UPDATE USING (auth.uid() = user_id);
+
+CREATE POLICY "Owners can delete documents" ON documents
+  FOR DELETE USING (auth.uid() = user_id);
+
+-- Trigger to update updated_at
+CREATE TRIGGER update_documents_updated_at
+  BEFORE UPDATE ON documents
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

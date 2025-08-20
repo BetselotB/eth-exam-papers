@@ -171,4 +171,97 @@ export class UserService {
       return true
     }
   }
+
+  // Documents CRUD
+  static async uploadDocument(params: {
+    file: File;
+    name: string;
+    category: string;
+    description?: string;
+  }): Promise<{ id: string } | null> {
+    const { file, name, category, description } = params;
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) {
+      console.error('Not authenticated');
+      return null;
+    }
+
+    const fileExt = file.name.split('.').pop();
+    const path = `${user.id}/${Date.now()}-${Math.random().toString(36).slice(2)}.${fileExt}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from('documents')
+      .upload(path, file, { upsert: false, contentType: file.type });
+    if (uploadError) {
+      console.error('Upload error:', uploadError);
+      return null;
+    }
+
+    const { data, error: insertError } = await supabase
+      .from('documents')
+      .insert({
+        user_id: user.id,
+        name,
+        category,
+        description: description ?? null,
+        file_path: path,
+        mime_type: file.type,
+        size: file.size,
+      })
+      .select('id')
+      .single();
+
+    if (insertError) {
+      console.error('Metadata insert error:', insertError);
+      return null;
+    }
+    return { id: data.id };
+  }
+
+  static async listDocuments(params: {
+    query?: string;
+    category?: string;
+    limit?: number;
+    cursor?: string | null;
+  }) {
+    const { query, category, limit = 24, cursor } = params;
+    let q = supabase
+      .from('documents')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (category && category !== 'all') {
+      q = q.eq('category', category);
+    }
+    if (query && query.trim()) {
+      q = q.or(`name.ilike.%${query}%,description.ilike.%${query}%`);
+    }
+    if (cursor) {
+      q = q.lt('created_at', cursor);
+    }
+
+    const { data, error } = await q;
+    if (error) {
+      console.error('List documents error:', error);
+      return [];
+    }
+    return data as Array<{
+      id: string;
+      user_id: string;
+      name: string;
+      category: string;
+      description: string | null;
+      file_path: string;
+      mime_type: string | null;
+      size: number | null;
+      created_at: string;
+    }>;
+  }
+
+  static getPublicUrl(filePath: string) {
+    const { data } = supabase.storage.from('documents').getPublicUrl(filePath);
+    return data.publicUrl;
+  }
 }

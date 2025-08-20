@@ -2,7 +2,7 @@
 
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { UserService } from "@/lib/userService";
 import { UserStats } from "@/types/user";
 import Link from "next/link";
@@ -12,6 +12,14 @@ export default function DashboardPage() {
   const router = useRouter();
   const [userStats, setUserStats] = useState<UserStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(true);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [feed, setFeed] = useState<any[]>([]);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const [cursor, setCursor] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Remove the conflicting redirect logic - middleware handles this
   // useEffect(() => {
@@ -23,8 +31,15 @@ export default function DashboardPage() {
   useEffect(() => {
     if (user) {
       loadUserStats();
+      loadFeed({ reset: true });
     }
   }, [user]);
+
+  useEffect(() => {
+    if (user) {
+      loadFeed({ reset: true });
+    }
+  }, [search, category]);
 
   const loadUserStats = async () => {
     try {
@@ -36,6 +51,47 @@ export default function DashboardPage() {
       setStatsLoading(false);
     }
   };
+
+  const loadFeed = async ({ reset = false }: { reset?: boolean } = {}) => {
+    try {
+      setFeedLoading(true);
+      const docs = await UserService.listDocuments({
+        query: search,
+        category,
+        limit: 24,
+        cursor: reset ? null : cursor,
+      });
+      const withUrls = docs.map((d) => ({
+        ...d,
+        url: UserService.getPublicUrl(d.file_path),
+      }));
+      if (reset) {
+        setFeed(withUrls);
+      } else {
+        setFeed((prev) => [...prev, ...withUrls]);
+      }
+      setCursor(
+        withUrls.length ? withUrls[withUrls.length - 1].created_at : null
+      );
+    } catch (error) {
+      console.error("Error loading feed:", error);
+    } finally {
+      setFeedLoading(false);
+    }
+  };
+
+  const categories = useMemo(
+    () => [
+      { key: "all", label: "All" },
+      { key: "math", label: "Math" },
+      { key: "science", label: "Science" },
+      { key: "engineering", label: "Engineering" },
+      { key: "cs", label: "Computer Science" },
+      { key: "language", label: "Language" },
+      { key: "other", label: "Other" },
+    ],
+    []
+  );
 
   if (loading) {
     return (
@@ -102,12 +158,39 @@ export default function DashboardPage() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="text-center mb-12">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Welcome to Your Dashboard
+            Community Documents
           </h1>
-          <p className="text-xl text-gray-600 max-w-2xl mx-auto">
-            You're now authenticated and can access exam papers. You have 20
-            free document views remaining.
-          </p>
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-white rounded-xl shadow-md p-4 flex flex-col md:flex-row gap-4 items-stretch md:items-center">
+              <div className="flex-1 flex items-center gap-3">
+                <input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by name or description..."
+                  className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <div>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="border border-gray-300 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  {categories.map((c) => (
+                    <option key={c.key} value={c.key}>
+                      {c.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={() => setUploadOpen(true)}
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors whitespace-nowrap"
+              >
+                Upload Document
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Stats Cards */}
@@ -203,60 +286,59 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* Quick Actions */}
-        <div className="bg-white rounded-xl p-8 shadow-lg">
-          <h2 className="text-2xl font-bold text-gray-900 mb-6">
-            Quick Actions
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <button className="bg-blue-600 text-white p-6 rounded-lg hover:bg-blue-700 transition-colors text-left">
-              <div className="flex items-center">
-                <svg
-                  className="w-8 h-8 mr-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
+        {/* Feed Grid */}
+        <div className="mt-8">
+          {feedLoading && feed.length === 0 ? (
+            <div className="text-center text-gray-600">
+              Loading documents...
+            </div>
+          ) : feed.length === 0 ? (
+            <div className="text-center text-gray-600">No documents found.</div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+              {feed.map((doc) => (
+                <div
+                  key={doc.id}
+                  className="bg-white rounded-xl shadow-md overflow-hidden"
                 >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
-                  />
-                </svg>
-                <div>
-                  <h3 className="text-lg font-semibold">Browse Exam Papers</h3>
-                  <p className="text-blue-100">
-                    Search and view available exam papers
-                  </p>
+                  <div className="p-4">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <h3 className="font-semibold text-gray-900">
+                          {doc.name}
+                        </h3>
+                        <p className="text-sm text-gray-500">{doc.category}</p>
+                      </div>
+                      <a
+                        href={doc.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-blue-600 hover:underline"
+                      >
+                        View
+                      </a>
+                    </div>
+                    {doc.description && (
+                      <p className="text-gray-600 text-sm mt-2 line-clamp-3">
+                        {doc.description}
+                      </p>
+                    )}
+                  </div>
                 </div>
-              </div>
-            </button>
+              ))}
+            </div>
+          )}
 
-            <button className="bg-green-600 text-white p-6 rounded-lg hover:bg-green-700 transition-colors text-left">
-              <div className="flex items-center">
-                <svg
-                  className="w-8 h-8 mr-4"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={2}
-                    d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M9 19l3 3m0 0l3-3m-3 3V10"
-                  />
-                </svg>
-                <div>
-                  <h3 className="text-lg font-semibold">Upload Papers</h3>
-                  <p className="text-green-100">
-                    Share your exam papers with the community
-                  </p>
-                </div>
-              </div>
-            </button>
-          </div>
+          {feed.length > 0 && (
+            <div className="flex justify-center mt-8">
+              <button
+                onClick={() => loadFeed({ reset: false })}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg hover:bg-black/80"
+              >
+                Load more
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Paywall Notice */}
@@ -325,6 +407,122 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* Upload Modal */}
+      {uploadOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white text-gray-900 rounded-xl w-full max-w-lg p-6 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold">Upload Document</h3>
+              <button
+                onClick={() => setUploadOpen(false)}
+                className="text-gray-500 hover:text-gray-700"
+              >
+                ✕
+              </button>
+            </div>
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const form = e.currentTarget as HTMLFormElement;
+                const fileInput = form.elements.namedItem(
+                  "file"
+                ) as HTMLInputElement;
+                const nameInput = form.elements.namedItem(
+                  "name"
+                ) as HTMLInputElement;
+                const categoryInput = form.elements.namedItem(
+                  "category"
+                ) as HTMLSelectElement;
+                const descInput = form.elements.namedItem(
+                  "description"
+                ) as HTMLInputElement;
+                const file = fileInput.files?.[0];
+                if (!file) return;
+                setUploading(true);
+                const res = await UserService.uploadDocument({
+                  file,
+                  name: nameInput.value,
+                  category: categoryInput.value,
+                  description: descInput.value,
+                });
+                setUploading(false);
+                if (res) {
+                  setUploadOpen(false);
+                  setSearch("");
+                  setCategory("all");
+                  await loadFeed({ reset: true });
+                }
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">Name</label>
+                <input
+                  name="name"
+                  required
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">
+                  Category
+                </label>
+                <select
+                  name="category"
+                  defaultValue="other"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900"
+                >
+                  {categories
+                    .filter((c) => c.key !== "all")
+                    .map((c) => (
+                      <option key={c.key} value={c.key}>
+                        {c.label}
+                      </option>
+                    ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">
+                  Description
+                </label>
+                <input
+                  name="description"
+                  placeholder="Optional"
+                  className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-900 placeholder-gray-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm text-gray-700 mb-1">File</label>
+                <input
+                  ref={fileInputRef}
+                  name="file"
+                  type="file"
+                  accept=".pdf,.png,.jpg,.jpeg,.doc,.docx,.ppt,.pptx"
+                  required
+                  className="w-full text-gray-900"
+                />
+              </div>
+              <div className="flex justify-end gap-3 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setUploadOpen(false)}
+                  className="px-4 py-2 rounded-lg border border-gray-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={uploading}
+                  className="px-4 py-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {uploading ? "Uploading..." : "Upload"}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import type { NextRequest } from 'next/server'
 
 export async function middleware(req: NextRequest) {
   const res = NextResponse.next()
+  const enableAuthRedirects = process.env.NEXT_PUBLIC_ENABLE_MIDDLEWARE_AUTH === 'true'
   
   // Skip middleware for auth callback to avoid redirect loops
   if (req.nextUrl.pathname.startsWith('/auth/callback')) {
@@ -61,15 +62,13 @@ export async function middleware(req: NextRequest) {
     req.nextUrl.pathname.startsWith(route)
   )
 
-  if (isProtectedRoute && !session) {
+  if (enableAuthRedirects && isProtectedRoute && !session) {
     console.log('Middleware: Redirecting to login - no session for protected route')
-    // Redirect to login if trying to access protected route without auth
     return NextResponse.redirect(new URL('/login', req.url))
   }
 
-  if (isAuthRoute && session) {
+  if (enableAuthRedirects && isAuthRoute && session) {
     console.log('Middleware: Redirecting to dashboard - user already authenticated')
-    // Redirect to dashboard if already authenticated
     return NextResponse.redirect(new URL('/dashboard', req.url))
   }
 
